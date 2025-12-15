@@ -1,0 +1,91 @@
+一、结论先行
+在 OPNsense 中，不建议直接使用系统 cron（crontab -e）来定时执行自定义脚本。
+官方推荐的做法是：通过 configd Action + Web GUI Cron 调度机制来执行自定义脚本。
+这种方式可以保证系统安全性、可维护性，并在系统升级或 HA 场景下保持一致行为。
+
+二、为什么不推荐直接使用系统 cron
+系统升级时，手动编辑的 cron 任务可能被覆盖
+任务不可视，不利于运维审计与排错
+与 Web GUI 管理体系脱节
+不符合 OPNsense 的安全模型设计
+结论：系统 cron 仅适用于临时调试，不建议作为正式运维方案。
+
+三、官方推荐方案架构说明
+Web GUI Cron
+↓（只负责调度）
+configd
+↓（Action，受控执行）
+/usr/local/bin/custom_script.sh
+说明：
+Cron 页面仅用于定时调度，实际可执行内容必须通过 configd Action 封装，由 configd 统一管理允许执行的命令。
+
+四、示例目标
+定时运行自定义脚本：
+/usr/local/bin/traffic_check.sh
+
+五、实施步骤（标准流程）
+步骤 1：准备自定义脚本
+编辑脚本文件：
+vi /usr/local/bin/traffic_check.sh
+示例内容：
+#!/bin/sh
+exec >> /var/log/traffic_check.log 2>&1
+echo "$(date) traffic check executed"
+实际流量检测逻辑
+
+赋予执行权限：
+chmod +x /usr/local/bin/traffic_check.sh
+
+步骤 2：创建 configd Action 配置
+2.1 Action 配置文件固定路径：
+/usr/local/opnsense/service/conf/actions.d/
+2.2 创建 Action 配置文件：
+vi /usr/local/opnsense/service/conf/actions.d/traffic_check.conf
+2.3 Action 配置示例：
+[traffic_check.run]
+command:/usr/local/bin/traffic_check.sh
+parameters:
+type:script
+message:Run traffic check script
+description:Run traffic_check.sh via cron
+
+六、Action 配置参数说明
+[traffic_check.run]
+表示 Action 的唯一标识，在 Web GUI 的 Cron 页面中作为可选 Action 出现。
+建议命名规则为：脚本名.动作。
+command:
+指定实际执行的命令，必须使用绝对路径。
+本例中为：/usr/local/bin/traffic_check.sh。
+parameters:
+参数占位定义。即使不传递参数，也必须保留该字段，否则 configd 无法正确解析。
+type:script
+指定 Action 类型。
+script 表示执行自定义脚本，是最常用的类型。
+message:
+执行 Action 时写入系统日志的说明信息，便于排错与审计。
+不影响 Cron 下拉框显示。
+description:
+必须字段。
+决定该 Action 是否会显示在 Web GUI 的 Cron 页面下拉列表中。
+如果缺失，即使 Action 被加载，也无法在 Cron 页面中选择。
+
+七、配置生效步骤
+在自定义脚本和 configd Action 配置文件都已写好之后，需要按以下顺序使配置生效。
+确认脚本具备执行权限
+ls -l /usr/local/bin/traffic_check.sh
+应至少包含可执行权限（x）。如未设置，执行：
+chmod +x /usr/local/bin/traffic_check.sh
+重启 configd 服务以加载新的 Action
+service configd restart
+该步骤用于让 configd 重新读取
+/usr/local/opnsense/service/conf/actions.d/目录下的所有 Action 配置文件。
+必要时重启 Web GUI（首次添加或异常情况）
+如果重启 configd 后，Web 页面仍未显示新的 Action，可执行：
+/usr/local/etc/rc.restart_webgui用于刷新前端缓存和菜单状态。
+
+八、在 Web GUI 中检查并创建 Cron 任务
+登录 OPNsense Web 界面
+进入：System → Settings → Cron
+新建 Cron 任务时，在 Action 下拉列表中应能看到：
+Run traffic_check.sh via cron
+（即 description 字段的内容）
